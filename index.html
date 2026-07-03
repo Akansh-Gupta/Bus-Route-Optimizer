@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Delhi Bus Route Optimizer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="static/style.css">
+  <script src="static/script.js" defer></script>
+</head>
+<body>
+
+<div id="controls">
+  <input id="from" type="text" placeholder="From stop (e.g. Laxmi Nagar)" />
+  <input id="to"   type="text" placeholder="To stop   (e.g. ITO)" />
+  <button onclick="findRoute()">Find Route</button>
+</div>
+
+<div id="info">
+  <h3>Route Found</h3>
+  <p id="info-from"></p>
+  <p id="info-to"></p>
+  <p id="info-stops"></p>
+  <p id="info-dist"></p>
+</div>
+
+<div id="error"></div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+</body>
+</html>
