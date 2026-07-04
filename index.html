@@ -1,30 +1,105 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Delhi Bus Route Optimizer</title>
+  <title>Delhi Bus Network Intelligence</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <link rel="stylesheet" href="static/style.css">
-  <script src="static/script.js" defer></script>
 </head>
 <body>
 
-<div id="controls">
-  <input id="from" type="text" placeholder="From stop (e.g. Laxmi Nagar)" />
-  <input id="to"   type="text" placeholder="To stop   (e.g. ITO)" />
-  <button onclick="findRoute()">Find Route</button>
-</div>
+  <!-- NAVBAR -->
+  <div id="navbar">
+    <span id="app-title">🚌 Delhi Bus Network Intelligence</span>
+    <div id="tabs">
+      <button class="tab active" onclick="switchTab('passenger')">Passenger</button>
+      <button class="tab" onclick="switchTab('planner')">Planner</button>
+    </div>
+  </div>
 
-<div id="info">
-  <h3>Route Found</h3>
-  <p id="info-from"></p>
-  <p id="info-to"></p>
-  <p id="info-stops"></p>
-  <p id="info-dist"></p>
-</div>
+  <!-- PASSENGER PANEL -->
+  <div id="passenger-panel" class="panel">
 
-<div id="error"></div>
-<div id="map"></div>
+    <!-- Simple Route -->
+    <div class="section-label">Find Route</div>
+    <div class="input-row">
+      <div class="autocomplete-wrapper">
+        <input id="from" type="text" placeholder="From stop..." autocomplete="off"
+          oninput="showSuggestions('from')" onblur="hideSuggestions('from')" />
+        <div class="suggestions" id="from-suggestions"></div>
+      </div>
+      <div class="autocomplete-wrapper">
+        <input id="to" type="text" placeholder="To stop..." autocomplete="off"
+          oninput="showSuggestions('to')" onblur="hideSuggestions('to')" />
+        <div class="suggestions" id="to-suggestions"></div>
+      </div>
+      <button onclick="findRoute()">Find Route</button>
+    </div>
 
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <!-- Divider -->
+    <div class="divider">or optimize multiple stops</div>
+
+    <!-- Multi Stop -->
+    <div class="input-row">
+      <div class="autocomplete-wrapper">
+        <input id="multi-input" type="text" placeholder="Add a stop to visit..."
+          autocomplete="off" oninput="showSuggestions('multi')" onblur="hideSuggestions('multi')" />
+        <div class="suggestions" id="multi-suggestions"></div>
+      </div>
+      <button class="btn-secondary" onclick="addMultiStop()">+ Add</button>
+      <button onclick="optimizeMulti()">Optimize</button>
+      <button class="btn-ghost" onclick="clearMulti()">Clear</button>
+    </div>
+
+    <!-- Added stops list -->
+    <div id="multi-stop-list"></div>
+
+  </div>
+
+  <!-- PLANNER PANEL -->
+  <div id="planner-panel" class="panel" style="display:none;">
+    <div class="section-label">Network Analysis Tools</div>
+
+    <div class="planner-grid">
+      <div class="planner-card" onclick="findDeadZones()">
+        <div class="card-icon">🔴</div>
+        <div class="card-title">Dead Zone Detector</div>
+        <div class="card-desc">Find areas in Delhi with no bus coverage within 1km</div>
+      </div>
+      <div class="planner-card" onclick="findCriticalStops()">
+        <div class="card-icon">⚠️</div>
+        <div class="card-title">Critical Stop Finder</div>
+        <div class="card-desc">Identify stops whose removal would break the most routes</div>
+      </div>
+      <div class="planner-card" onclick="showHeatmap()">
+        <div class="card-icon">🌡️</div>
+        <div class="card-title">Coverage Heatmap</div>
+        <div class="card-desc">Visualize bus stop density across Delhi</div>
+      </div>
+      <div class="planner-card" onclick="findRedundantRoutes()">
+        <div class="card-icon">🔁</div>
+        <div class="card-title">Route Redundancy</div>
+        <div class="card-desc">Find routes that overlap too much</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- INFO BOX -->
+  <div id="info">
+    <h3 id="info-title">Route Found</h3>
+    <p id="info-from"></p>
+    <p id="info-to"></p>
+    <p id="info-stops"></p>
+    <p id="info-dist"></p>
+  </div>
+
+  <!-- ERROR -->
+  <div id="error"></div>
+
+  <!-- MAP -->
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="static/script.js"></script>
 </body>
 </html>
