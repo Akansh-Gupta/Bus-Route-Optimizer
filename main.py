@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import networkx as nx
 import pandas as pd
 from math import radians, sin, cos, sqrt, atan2
-from optimizer import optimize_route
+from optimizer import optimize_route, find_dead_zones
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -152,3 +152,14 @@ def optimize(stops: list[StopInput]):
         raise HTTPException(status_code=500, detail="Could not find optimal route")
 
     return {"optimized_stops": result}
+
+
+@app.get("/dead-zones")
+def get_dead_zones(grid_size_km: float = 0.5, radius_km: float = 1.0):
+    dead_zones = find_dead_zones(stops, grid_size_km, radius_km)
+    return {
+        "count": len(dead_zones),
+        "grid_size_km": grid_size_km,
+        "radius_km": radius_km,
+        "dead_zones": dead_zones
+    }
