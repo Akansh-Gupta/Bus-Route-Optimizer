@@ -5,7 +5,7 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 }).addTo(map);
 
 let currentLayers = [];
-let multiStops    = [];
+let multiStops = [];
 
 // ── TAB SWITCHING ─────────────────────────────────────────────
 function switchTab(tab) {
@@ -25,8 +25,8 @@ function switchTab(tab) {
 }
 
 function recalcMapHeight() {
-  const navbar  = document.getElementById("navbar").offsetHeight;
-  const panel   = document.querySelector(".panel:not([style*='display:none'])").offsetHeight;
+  const navbar = document.getElementById("navbar").offsetHeight;
+  const panel = document.querySelector(".panel:not([style*='display:none'])").offsetHeight;
   document.getElementById("map").style.height = `calc(100vh - ${navbar + panel}px)`;
 }
 
@@ -37,7 +37,7 @@ async function showSuggestions(inputId) {
   const inputEl = document.getElementById(
     inputId === "multi" ? "multi-input" : inputId
   );
-  const query         = inputEl.value.trim();
+  const query = inputEl.value.trim();
   const suggestionsBox = document.getElementById(inputId + "-suggestions");
 
   if (query.length < 2) {
@@ -47,7 +47,7 @@ async function showSuggestions(inputId) {
 
   clearTimeout(debounceTimers[inputId]);
   debounceTimers[inputId] = setTimeout(async () => {
-    const res  = await fetch(`http://127.0.0.1:8000/search-stops?query=${encodeURIComponent(query)}`);
+    const res = await fetch(`http://127.0.0.1:8000/search-stops?query=${encodeURIComponent(query)}`);
     const data = await res.json();
 
     if (!data.results.length) {
@@ -101,16 +101,16 @@ async function findRoute() {
   }
 
   const data = await res.json();
-  drawRoute(data.path, "royalblue");
+  drawRoute(data.path, "royalblue", data.road_geometry);
   showInfo("Route Found", data.from, data.to, data.num_stops, data.total_distance_km);
 }
 
 // ── MULTI STOP ────────────────────────────────────────────────
 function addMultiStop() {
   const input = document.getElementById("multi-input");
-  const name  = input.value.trim();
-  const lat   = parseFloat(input.dataset.lat);
-  const lon   = parseFloat(input.dataset.lon);
+  const name = input.value.trim();
+  const lat = parseFloat(input.dataset.lat);
+  const lon = parseFloat(input.dataset.lon);
 
   if (!name || isNaN(lat) || isNaN(lon)) {
     showError("Please select a stop from the dropdown");
@@ -165,21 +165,21 @@ function clearMulti() {
 }
 
 // ── PLANNER FEATURES (placeholders for now) ───────────────────
-function findDeadZones()       { showError("Coming soon — Dead Zone Detector"); }
-function findCriticalStops()   { showError("Coming soon — Critical Stop Finder"); }
-function showHeatmap()         { showError("Coming soon — Coverage Heatmap"); }
+function findDeadZones() { showError("Coming soon — Dead Zone Detector"); }
+function findCriticalStops() { showError("Coming soon — Critical Stop Finder"); }
+function showHeatmap() { showError("Coming soon — Coverage Heatmap"); }
 function findRedundantRoutes() { showError("Coming soon — Route Redundancy"); }
 
 // ── MAP HELPERS ───────────────────────────────────────────────
-function drawRoute(stops, color) {
+function drawRoute(stops, color, roadGeometry) {
   clearMap();
   const latlngs = [];
 
   stops.forEach((stop, i) => {
     const isFirst = i === 0;
-    const isLast  = i === stops.length - 1;
-    const c       = isFirst ? "green" : isLast ? "red" : color;
-    const r       = (isFirst || isLast) ? 10 : 6;
+    const isLast = i === stops.length - 1;
+    const c = isFirst ? "green" : isLast ? "red" : color;
+    const r = (isFirst || isLast) ? 10 : 6;
 
     const marker = L.circleMarker([stop.lat, stop.lon], {
       radius: r, color: c, fillColor: c, fillOpacity: 0.9, weight: 2
@@ -189,7 +189,10 @@ function drawRoute(stops, color) {
     latlngs.push([stop.lat, stop.lon]);
   });
 
-  const line = L.polyline(latlngs, { color, weight: 5, opacity: 0.8 }).addTo(map);
+  // use real road geometry if provided, otherwise fall back to straight lines between stops
+  const lineCoords = (roadGeometry && roadGeometry.length) ? roadGeometry : latlngs;
+
+  const line = L.polyline(lineCoords, { color, weight: 5, opacity: 0.8 }).addTo(map);
   currentLayers.push(line);
   map.fitBounds(line.getBounds(), { padding: [40, 40] });
 }
@@ -203,16 +206,16 @@ function clearMap() {
 // ── UI HELPERS ────────────────────────────────────────────────
 function showInfo(title, from, to, stops, dist) {
   document.getElementById("info").style.display = "block";
-  document.getElementById("info-title").innerText  = title;
-  document.getElementById("info-from").innerText   = "From: "     + from;
-  document.getElementById("info-to").innerText     = "To: "       + to;
-  document.getElementById("info-stops").innerText  = "Stops: "    + stops;
-  document.getElementById("info-dist").innerText   = "Distance: " + dist + (dist !== "—" ? " km" : "");
+  document.getElementById("info-title").innerText = title;
+  document.getElementById("info-from").innerText = "From: " + from;
+  document.getElementById("info-to").innerText = "To: " + to;
+  document.getElementById("info-stops").innerText = "Stops: " + stops;
+  document.getElementById("info-dist").innerText = "Distance: " + dist + (dist !== "—" ? " km" : "");
 }
 
 function showError(msg) {
   const el = document.getElementById("error");
-  el.innerText       = msg;
-  el.style.display   = "block";
+  el.innerText = msg;
+  el.style.display = "block";
   setTimeout(() => el.style.display = "none", 3000);
 }
