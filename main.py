@@ -1,12 +1,19 @@
 # to run the server:- python -m uvicorn main:app --reload
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 import networkx as nx
 import pandas as pd
+import os
+import requests
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from math import radians, sin, cos, sqrt, atan2
 from optimizer import optimize_route, find_dead_zones
 from pydantic import BaseModel
+
+load_dotenv()
+ORS_API_KEY = os.environ.get("ORS_API_KEY")
 
 app = FastAPI()
 
@@ -33,6 +40,26 @@ def haversine(lat1, lon1, lat2, lon2):
     )
     return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 
+def get_road_geometry(lat1, lon1, lat2, lon2):
+    url = "https://api.openrouteservice.org/v2/directions/driving-car"
+    params = {
+        "api_key": ORS_API_KEY,
+        "start": f"{lon1},{lat1}",
+        "end": f"{lon2},{lat2}",
+    }
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        coords = data["features"][0]["geometry"]["coordinates"]
+        # ORS returns [lon, lat] pairs — convert to [lat, lon] for Leaflet
+        return [[lat, lon] for lon, lat in coords]
+    except Exception as e:
+        print(f"ORS error for ({lat1},{lon1}) -> ({lat2},{lon2}): {e}")
+        return None
+
+def astar_heuristic(u, v):
+    return haversine(coord[u]["stop_lat"], coord[u]["stop_lon"], coord[v]["stop_lat"], coord[v]["stop_lon"])
 
 coord = stops.set_index("stop_id")[["stop_lat", "stop_lon"]].to_dict("index")
 name_to_id = {
@@ -90,13 +117,31 @@ def shortest_path(from_stop: str, to_stop: str):
         for tgt in to_ids:
             if not nx.has_path(G, src, tgt):
                 continue
-            length = nx.dijkstra_path_length(G, src, tgt, weight="weight")
+            try:
+                path = nx.astar_path(G, src, tgt, heuristic=astar_heuristic, weight="weight")
+                length = nx.astar_path_length(G, src, tgt, heuristic=astar_heuristic, weight="weight")
+            except nx.NetworkXNoPath:
+                continue
             if length < best_length:
                 best_length = length
-                best_path = nx.dijkstra_path(G, src, tgt, weight="weight")
+                best_path = path
 
     if not best_path:
         raise HTTPException(status_code=404, detail="No path found between these stops")
+    
+    road_geometry = []
+    for i in range(len(best_path) - 1):
+        a, b = best_path[i], best_path[i + 1]
+        segment = get_road_geometry(
+            coord[a]["stop_lat"], coord[a]["stop_lon"],
+            coord[b]["stop_lat"], coord[b]["stop_lon"],
+        )
+        if segment:
+            road_geometry.extend(segment)
+        else:
+            # fallback: straight line if ORS fails for this segment
+            road_geometry.append([coord[a]["stop_lat"], coord[a]["stop_lon"]])
+            road_geometry.append([coord[b]["stop_lat"], coord[b]["stop_lon"]])
 
     path_details = [
         {
@@ -109,12 +154,13 @@ def shortest_path(from_stop: str, to_stop: str):
     ]
 
     return {
-        "from": from_stop,
-        "to": to_stop,
-        "total_distance_km": round(best_length, 2),
-        "num_stops": len(best_path),
-        "path": path_details,
-    }
+    "from": from_stop,
+    "to": to_stop,
+    "total_distance_km": round(best_length, 2),
+    "num_stops": len(best_path),
+    "path": path_details,
+    "road_geometry": road_geometry,
+}
 
 
 @app.get("/search-stops")
