@@ -40,6 +40,7 @@ def haversine(lat1, lon1, lat2, lon2):
     )
     return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 
+
 def get_road_geometry(lat1, lon1, lat2, lon2):
     url = "https://api.openrouteservice.org/v2/directions/driving-car"
     params = {
@@ -58,8 +59,29 @@ def get_road_geometry(lat1, lon1, lat2, lon2):
         print(f"ORS error for ({lat1},{lon1}) -> ({lat2},{lon2}): {e}")
         return None
 
+
 def astar_heuristic(u, v):
     return haversine(coord[u]["stop_lat"], coord[u]["stop_lon"], coord[v]["stop_lat"], coord[v]["stop_lon"])
+
+
+def simplify_path(path, coord, min_gap_km=0.08):
+    # collapses consecutive stops that are near-duplicates (e.g. opposite-carriageway
+    # stop pairs a few meters apart) so ORS doesn't trace a doubled "there and back"
+    # line for a hop that isn't a real bus movement.
+    if len(path) <= 2:
+        return path
+    simplified = [path[0]]
+    for sid in path[1:-1]:
+        last = simplified[-1]
+        d = haversine(
+            coord[last]["stop_lat"], coord[last]["stop_lon"],
+            coord[sid]["stop_lat"], coord[sid]["stop_lon"],
+        )
+        if d >= min_gap_km:
+            simplified.append(sid)
+    simplified.append(path[-1])
+    return simplified
+
 
 coord = stops.set_index("stop_id")[["stop_lat", "stop_lon"]].to_dict("index")
 name_to_id = {
@@ -67,7 +89,11 @@ name_to_id = {
 }
 id_to_name = dict(zip(stops["stop_id"], stops["stop_name"]))
 
-G = nx.Graph()
+# directed graph: edge a->b means a real trip travels FROM a TO b.
+# keeps the pathfinder from treating a road as two-way just because SOME trip
+# runs the opposite direction between two nearby stops (e.g. opposite
+# carriageways of a divided road) — that was causing zigzagging routes.
+G = nx.DiGraph()
 for _, row in stops.iterrows():
     G.add_node(
         row["stop_id"], name=row["stop_name"], lat=row["stop_lat"], lon=row["stop_lon"]
@@ -87,9 +113,32 @@ for trip_id, group in stop_times.groupby("trip_id"):
             )
             G.add_edge(a, b, weight=dist)
 
+# fallback graph, used ONLY when the directed data has a genuine gap
+# (e.g. the return-direction trip just isn't in this GTFS feed) and the
+# directed search can't find a reasonably direct path.
+UG = G.to_undirected()
+
 print(
     "Graph ready →", G.number_of_nodes(), "stops,", G.number_of_edges(), "connections"
 )
+
+
+def find_best_path(graph, from_ids, to_ids):
+    best_path = None
+    best_length = float("inf")
+    for src in from_ids:
+        for tgt in to_ids:
+            if not nx.has_path(graph, src, tgt):
+                continue
+            try:
+                path = nx.astar_path(graph, src, tgt, heuristic=astar_heuristic, weight="weight")
+                length = nx.astar_path_length(graph, src, tgt, heuristic=astar_heuristic, weight="weight")
+            except nx.NetworkXNoPath:
+                continue
+            if length < best_length:
+                best_length = length
+                best_path = path
+    return best_path, best_length
 
 
 # endpoint
@@ -109,26 +158,24 @@ def shortest_path(from_stop: str, to_stop: str):
     if not to_ids:
         raise HTTPException(status_code=404, detail=f"Stop '{to_stop}' not found")
 
-    # try all combinations, keep shortest path found
-    best_path = None
-    best_length = float("inf")
+    # 1. try the directed graph first — respects real travel direction
+    best_path, best_length = find_best_path(G, from_ids, to_ids)
 
-    for src in from_ids:
-        for tgt in to_ids:
-            if not nx.has_path(G, src, tgt):
-                continue
-            try:
-                path = nx.astar_path(G, src, tgt, heuristic=astar_heuristic, weight="weight")
-                length = nx.astar_path_length(G, src, tgt, heuristic=astar_heuristic, weight="weight")
-            except nx.NetworkXNoPath:
-                continue
-            if length < best_length:
-                best_length = length
-                best_path = path
+    # 2. fall back to the undirected graph if the directed graph found nothing
+    #    at all, or only found a much longer detour — a sign that the
+    #    directional trip data has a gap for this specific pair (e.g. the
+    #    reverse-direction trip wasn't included in the GTFS feed)
+    used_fallback = False
+    ug_path, ug_length = find_best_path(UG, from_ids, to_ids)
+    if best_path is None or (ug_path is not None and ug_length < best_length * 0.8):
+        best_path, best_length = ug_path, ug_length
+        used_fallback = True
 
     if not best_path:
         raise HTTPException(status_code=404, detail="No path found between these stops")
-    
+
+    best_path = simplify_path(best_path, coord)
+
     road_geometry = []
     for i in range(len(best_path) - 1):
         a, b = best_path[i], best_path[i + 1]
@@ -154,13 +201,14 @@ def shortest_path(from_stop: str, to_stop: str):
     ]
 
     return {
-    "from": from_stop,
-    "to": to_stop,
-    "total_distance_km": round(best_length, 2),
-    "num_stops": len(best_path),
-    "path": path_details,
-    "road_geometry": road_geometry,
-}
+        "from": from_stop,
+        "to": to_stop,
+        "total_distance_km": round(best_length, 2),
+        "num_stops": len(best_path),
+        "path": path_details,
+        "road_geometry": road_geometry,
+        "used_undirected_fallback": used_fallback,
+    }
 
 
 @app.get("/search-stops")
@@ -169,7 +217,7 @@ def search_stops(query: str):
     matches = stops[
         stops["stop_name"].str.contains(query.strip(), case=False, na=False)
     ][["stop_id", "stop_name", "stop_lat", "stop_lon"]]
-    
+
     # remove duplicate stop names — same name appears for each direction of travel
     matches = matches.drop_duplicates(subset="stop_name")
 
