@@ -86,7 +86,7 @@ function hideSuggestions(inputId) {
 // ── SIMPLE ROUTE ──────────────────────────────────────────────
 async function findRoute() {
   const from = document.getElementById("from").value.trim();
-  const to   = document.getElementById("to").value.trim();
+  const to = document.getElementById("to").value.trim();
 
   if (!from || !to) { showError("Please enter both stops"); return; }
 
@@ -152,10 +152,10 @@ async function optimizeMulti() {
   });
 
   const data = await res.json();
-  drawRoute(data.optimized_stops, "orange");
+  drawRoute(data.optimized_stops, "orange", data.road_geometry);
   showInfo("Optimized Route", data.optimized_stops[0].stop_name,
     data.optimized_stops[data.optimized_stops.length - 1].stop_name,
-    data.optimized_stops.length, "—");
+    data.optimized_stops.length, data.total_distance_km);
 }
 
 function clearMulti() {
@@ -164,11 +164,86 @@ function clearMulti() {
   clearMap();
 }
 
-// ── PLANNER FEATURES (placeholders for now) ───────────────────
-function findDeadZones() { showError("Coming soon — Dead Zone Detector"); }
-function findCriticalStops() { showError("Coming soon — Critical Stop Finder"); }
-function showHeatmap() { showError("Coming soon — Coverage Heatmap"); }
-function findRedundantRoutes() { showError("Coming soon — Route Redundancy"); }
+/// ── PLANNER FEATURES ─────────────────────────────────────────
+async function findDeadZones() {
+  clearMap();
+  const res = await fetch("http://127.0.0.1:8000/dead-zones?grid_size_km=0.5&radius_km=1.0");
+  const data = await res.json();
+
+  data.dead_zones.forEach(z => {
+    const marker = L.circleMarker([z.lat, z.lon], {
+      radius: 5, color: "red", fillColor: "red", fillOpacity: 0.5, weight: 1
+    }).addTo(map).bindPopup(`Dead zone<br>Nearest stop: ${z.nearest_stop_km} km away`);
+    currentLayers.push(marker);
+  });
+
+  showResultsList(`Dead Zones Found: ${data.count}`,
+    [`Areas with no bus stop within ${data.radius_km} km`]);
+
+  if (data.dead_zones.length) {
+    const bounds = L.latLngBounds(data.dead_zones.map(z => [z.lat, z.lon]));
+    map.fitBounds(bounds, { padding: [40, 40] });
+  }
+}
+
+async function findCriticalStops() {
+  clearMap();
+  const res = await fetch("http://127.0.0.1:8000/critical-stops?top_n=15");
+  const data = await res.json();
+
+  data.critical_stops.forEach((s, i) => {
+    const marker = L.circleMarker([s.lat, s.lon], {
+      radius: 10 - i * 0.3, color: "orange", fillColor: "orange", fillOpacity: 0.7, weight: 2
+    }).addTo(map).bindPopup(`<b>${s.stop_name}</b><br>Centrality: ${s.centrality_score}`);
+    currentLayers.push(marker);
+  });
+
+  showResultsList("Critical Stops (top " + data.count + ")",
+    data.critical_stops.map((s, i) => `${i + 1}. ${s.stop_name} (score: ${s.centrality_score})`));
+
+  if (data.critical_stops.length) {
+    const bounds = L.latLngBounds(data.critical_stops.map(s => [s.lat, s.lon]));
+    map.fitBounds(bounds, { padding: [40, 40] });
+  }
+}
+
+let heatLayer = null;
+async function showHeatmap() {
+  clearMap();
+  if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
+
+  const res = await fetch("http://127.0.0.1:8000/all-stops");
+  const data = await res.json();
+
+  const points = data.stops.map(s => [s.lat, s.lon, 0.5]);
+  heatLayer = L.heatLayer(points, { radius: 18, blur: 15, maxZoom: 15 }).addTo(map);
+  currentLayers.push(heatLayer);
+
+  showResultsList("Coverage Heatmap", [`${data.stops.length} stops plotted by density`]);
+  map.setView([28.6139, 77.2090], 11);
+}
+
+async function findRedundantRoutes() {
+  clearMap();
+  const res = await fetch("http://127.0.0.1:8000/route-redundancy?threshold=0.7");
+  const data = await res.json();
+
+  if (!data.redundant_pairs.length) {
+    showResultsList("Route Redundancy", ["No highly overlapping trip pairs found above the 70% threshold."]);
+    return;
+  }
+
+  showResultsList(`Redundant Route Pairs (${data.count})`,
+    data.redundant_pairs.map(p =>
+      `Trip ${p.trip_a} ↔ Trip ${p.trip_b} — ${Math.round(p.overlap * 100)}% overlap (${p.shared_stops} shared stops)`
+    ));
+}
+
+function showResultsList(title, lines) {
+  const panel = document.getElementById("results-panel");
+  panel.innerHTML = `<h3>${title}</h3>` + lines.map(l => `<p>${l}</p>`).join("");
+  panel.style.display = "block";
+}
 
 // ── MAP HELPERS ───────────────────────────────────────────────
 function drawRoute(stops, color, roadGeometry) {
@@ -203,6 +278,8 @@ function clearMap() {
   currentLayers.forEach(l => map.removeLayer(l));
   currentLayers = [];
   document.getElementById("info").style.display = "none";
+  const panel = document.getElementById("results-panel");
+  if (panel) panel.style.display = "none";
 }
 
 // ── UI HELPERS ────────────────────────────────────────────────
