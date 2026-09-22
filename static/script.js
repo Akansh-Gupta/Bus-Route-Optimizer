@@ -173,27 +173,29 @@ function findRedundantRoutes() { showError("Coming soon — Route Redundancy"); 
 // ── MAP HELPERS ───────────────────────────────────────────────
 function drawRoute(stops, color, roadGeometry) {
   clearMap();
-  const latlngs = [];
-
-  stops.forEach((stop, i) => {
-    const isFirst = i === 0;
-    const isLast = i === stops.length - 1;
-    const c = isFirst ? "green" : isLast ? "red" : color;
-    const r = (isFirst || isLast) ? 10 : 6;
-
-    const marker = L.circleMarker([stop.lat, stop.lon], {
-      radius: r, color: c, fillColor: c, fillOpacity: 0.9, weight: 2
-    }).addTo(map).bindPopup(`<b>${stop.stop_name}</b><br>Stop ${i + 1} of ${stops.length}`);
-
-    currentLayers.push(marker);
-    latlngs.push([stop.lat, stop.lon]);
-  });
+  const latlngs = stops.map(s => [s.lat, s.lon]);
 
   // use real road geometry if provided, otherwise fall back to straight lines between stops
   const lineCoords = (roadGeometry && roadGeometry.length) ? roadGeometry : latlngs;
 
+  // draw the route line FIRST so stop markers always render on top of it
   const line = L.polyline(lineCoords, { color, weight: 5, opacity: 0.8 }).addTo(map);
   currentLayers.push(line);
+
+  stops.forEach((stop, i) => {
+    const isFirst = i === 0;
+    const isLast = i === stops.length - 1;
+    // white fill + colored border so markers never blend into a same-colored route line
+    const border = isFirst ? "green" : isLast ? "red" : color;
+    const r = (isFirst || isLast) ? 10 : 7;
+
+    const marker = L.circleMarker([stop.lat, stop.lon], {
+      radius: r, color: border, fillColor: "#fff", fillOpacity: 1, weight: 3
+    }).addTo(map).bindPopup(`<b>${stop.stop_name}</b><br>Stop ${i + 1} of ${stops.length}`);
+
+    currentLayers.push(marker);
+  });
+
   map.fitBounds(line.getBounds(), { padding: [40, 40] });
 }
 
