@@ -2,92 +2,19 @@
 <html>
 
 <head>
-  <title>Delhi Bus Network Intelligence</title>
+  <title>TransitOpt</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <link rel="stylesheet" href="static/style.css">
 </head>
 
 <body>
 
-  <!-- NAVBAR -->
-  <div id="navbar">
-    <span id="app-title">🚌 Delhi Bus Network Intelligence</span>
-    <div id="tabs">
-      <button class="tab active" onclick="switchTab('passenger')">Passenger</button>
-      <button class="tab" onclick="switchTab('planner')">Planner</button>
-    </div>
-  </div>
+  <!-- MAP (full screen, behind everything) -->
+  <div id="map"></div>
 
-  <!-- PASSENGER PANEL -->
-  <div id="passenger-panel" class="panel">
-
-    <!-- Simple Route -->
-    <div class="section-label">Find Route</div>
-    <div class="input-row">
-      <div class="autocomplete-wrapper">
-        <input id="from" type="text" placeholder="From stop..." autocomplete="off" oninput="showSuggestions('from')"
-          onblur="hideSuggestions('from')" />
-        <div class="suggestions" id="from-suggestions"></div>
-      </div>
-      <div class="autocomplete-wrapper">
-        <input id="to" type="text" placeholder="To stop..." autocomplete="off" oninput="showSuggestions('to')"
-          onblur="hideSuggestions('to')" />
-        <div class="suggestions" id="to-suggestions"></div>
-      </div>
-      <button onclick="findRoute()">Find Route</button>
-    </div>
-
-    <!-- Divider -->
-    <div class="divider">or optimize multiple stops</div>
-
-    <!-- Multi Stop -->
-    <div class="input-row">
-      <div class="autocomplete-wrapper">
-        <input id="multi-input" type="text" placeholder="Add a stop to visit..." autocomplete="off"
-          oninput="showSuggestions('multi')" onblur="hideSuggestions('multi')" />
-        <div class="suggestions" id="multi-suggestions"></div>
-      </div>
-      <button class="btn-secondary" onclick="addMultiStop()">+ Add</button>
-      <button onclick="optimizeMulti()">Optimize</button>
-      <button class="btn-ghost" onclick="clearMulti()">Clear</button>
-    </div>
-
-    <!-- Added stops list -->
-    <div id="multi-stop-list"></div>
-
-  </div>
-
-  <!-- PLANNER PANEL -->
-  <div id="planner-panel" class="panel" style="display:none;">
-    <div class="section-label">Network Analysis Tools</div>
-
-    <div class="planner-grid">
-      <div class="planner-card" onclick="findDeadZones()">
-        <div class="card-icon">🔴</div>
-        <div class="card-title">Dead Zone Detector</div>
-        <div class="card-desc">Find areas in Delhi with no bus coverage within 1km</div>
-      </div>
-      <div class="planner-card" onclick="findCriticalStops()">
-        <div class="card-icon">⚠️</div>
-        <div class="card-title">Critical Stop Finder</div>
-        <div class="card-desc">Identify stops whose removal would break the most routes</div>
-      </div>
-      <div class="planner-card" onclick="showHeatmap()">
-        <div class="card-icon">🌡️</div>
-        <div class="card-title">Coverage Heatmap</div>
-        <div class="card-desc">Visualize bus stop density across Delhi</div>
-      </div>
-      <div class="planner-card" onclick="findRedundantRoutes()">
-        <div class="card-icon">🔁</div>
-        <div class="card-title">Route Redundancy</div>
-        <div class="card-desc">Find routes that overlap too much</div>
-      </div>
-    </div>
-
-  </div>
-
-  <!-- INFO BOX -->
+  <!-- FLOATING INFO / ERROR / RESULTS (top-left over the map) -->
   <div id="info">
+    <button class="close-btn" onclick="hideInfo()">×</button>
     <h3 id="info-title">Route Found</h3>
     <p id="info-from"></p>
     <p id="info-to"></p>
@@ -95,16 +22,113 @@
     <p id="info-dist"></p>
   </div>
 
-  <!-- ERROR -->
   <div id="error"></div>
 
-  <!-- MAP -->
-  <!-- RESULTS LIST (used by planner tools) -->
-  <div id="results-panel" style="display:none;"></div>
-  <div id="map"></div>
+  <div id="results-panel">
+    <button class="close-btn" onclick="hideResults()">×</button>
+    <div id="results-body"></div>
+  </div>
+
+  <!-- SIDEBAR TOGGLE (visible when collapsed) -->
+  <button id="sidebar-toggle" onclick="toggleSidebar()" title="Show panel">☰</button>
+
+  <!-- SIDEBAR (collapsible, vertical, right side) -->
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <span id="app-title" style="font-size: larger;">🚌 TransitOpt</span>
+      <button id="collapse-btn" onclick="toggleSidebar()" title="Collapse panel">›</button>
+    </div>
+
+    <div id="tabs">
+      <button class="tab active" onclick="switchTab('passenger')">Passenger</button>
+      <button class="tab" onclick="switchTab('planner')">Planner</button>
+      <button class="tab" onclick="switchTab('chat')">Chat</button>
+    </div>
+
+    <div id="sidebar-content">
+
+      <!-- PASSENGER PANEL -->
+      <div id="passenger-panel" class="panel">
+
+        <div class="section-label">Find Route</div>
+        <div class="input-col">
+          <div class="autocomplete-wrapper">
+            <input id="from" type="text" placeholder="From stop..." autocomplete="off"
+              oninput="showSuggestions('from')" onblur="hideSuggestions('from')" />
+            <div class="suggestions" id="from-suggestions"></div>
+          </div>
+          <div class="autocomplete-wrapper">
+            <input id="to" type="text" placeholder="To stop..." autocomplete="off" oninput="showSuggestions('to')"
+              onblur="hideSuggestions('to')" />
+            <div class="suggestions" id="to-suggestions"></div>
+          </div>
+          <button onclick="findRoute()">Find Route</button>
+        </div>
+
+        <div class="divider">or optimize multiple stops</div>
+
+        <div class="input-col">
+          <div class="autocomplete-wrapper">
+            <input id="multi-input" type="text" placeholder="Add a stop to visit..." autocomplete="off"
+              oninput="showSuggestions('multi')" onblur="hideSuggestions('multi')" />
+            <div class="suggestions" id="multi-suggestions"></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn-secondary" onclick="addMultiStop()">+ Add</button>
+            <button onclick="optimizeMulti()">Optimize</button>
+            <button class="btn-ghost" onclick="clearMulti()">Clear</button>
+          </div>
+        </div>
+
+        <div id="multi-stop-list"></div>
+
+      </div>
+
+      <!-- PLANNER PANEL -->
+      <div id="planner-panel" class="panel" style="display:none;">
+        <div class="section-label">Network Analysis Tools</div>
+
+        <div class="planner-grid">
+          <div class="planner-card" onclick="findDeadZones()">
+            <div class="card-icon">🔴</div>
+            <div class="card-title">Dead Zone Detector</div>
+            <div class="card-desc">Find areas in Delhi with no bus coverage within 1km</div>
+          </div>
+          <div class="planner-card" onclick="findCriticalStops()">
+            <div class="card-icon">⚠️</div>
+            <div class="card-title">Critical Stop Finder</div>
+            <div class="card-desc">Identify stops whose removal would break the most routes</div>
+          </div>
+          <div class="planner-card" onclick="showHeatmap()">
+            <div class="card-icon">🌡️</div>
+            <div class="card-title">Coverage Heatmap</div>
+            <div class="card-desc">Visualize bus stop density across Delhi</div>
+          </div>
+          <div class="planner-card" onclick="findRedundantRoutes()">
+            <div class="card-icon">🔁</div>
+            <div class="card-title">Route Redundancy</div>
+            <div class="card-desc">Find routes that overlap too much</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CHAT PANEL -->
+      <div id="chat-panel" class="panel" style="display:none;">
+        <div class="section-label">Ask for a Route</div>
+        <div id="chat-log"></div>
+        <div class="input-col">
+          <input id="chat-input" type="text" placeholder="e.g. take me from Laxmi Nagar to ITO"
+            onkeydown="if(event.key==='Enter') sendChat()" />
+          <button onclick="sendChat()">Send</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+  <script src="https://unpkg.com/leaflet-polylinedecorator/dist/leaflet.polylineDecorator.js"></script>
   <script src="static/script.js"></script>
 </body>
 
