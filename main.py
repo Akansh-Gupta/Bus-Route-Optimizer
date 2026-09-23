@@ -80,24 +80,37 @@ def simplify_path(path, coord, min_gap_km=0.08):
 def extract_stops_rule_based(message):
     """
     Zero-cost intent parser: no external API, no cost, works offline.
-    Handles phrasings like "take me from X to Y", "route from X to Y", "X to Y".
+    Handles "from X to Y", "to Y from X" (including filler like
+    "I want to go to Y from X"), and the plain fallback "X to Y".
     """
-    msg = message.strip()
+    msg = message.strip().rstrip(" ?.!")
+    filler = r"^(take me|i want to go|i want to|how do i get|please|route me)\s*"
 
-    patterns = [
-        r"from\s+(.+?)\s+to\s+(.+)",   # "... from X to Y ..."
-        r"^(.+?)\s+to\s+(.+)$",        # fallback: "X to Y"
-    ]
+    lower = msg.lower()
+    from_idx = lower.rfind(" from ")
 
-    for pattern in patterns:
-        match = re.search(pattern, msg, re.IGNORECASE)
-        if match:
-            from_raw = match.group(1).strip(" ?.!")
-            to_raw = match.group(2).strip(" ?.!")
-            from_raw = re.sub(
-                r"^(take me|i want to go|how do i get|please|route me)\s*",
-                "", from_raw, flags=re.IGNORECASE
-            ).strip()
+    if from_idx != -1:
+        # everything after the LAST "from" is the origin
+        from_raw = msg[from_idx + len(" from "):].strip()
+        before = msg[:from_idx]
+
+        # within the part before "from", the destination is whatever
+        # follows the LAST "to" — this skips filler like "want to go to X"
+        before_lower = before.lower()
+        to_idx = before_lower.rfind(" to ")
+        to_raw = before[to_idx + len(" to "):].strip() if to_idx != -1 else before.strip()
+
+        from_raw = re.sub(filler, "", from_raw, flags=re.IGNORECASE).strip()
+        to_raw = re.sub(filler, "", to_raw, flags=re.IGNORECASE).strip()
+        if from_raw and to_raw:
+            return from_raw, to_raw
+
+    # no "from" in the message — fall back to plain "X to Y"
+    match = re.search(r"^(.+?)\s+to\s+(.+)$", msg, re.IGNORECASE)
+    if match:
+        from_raw = re.sub(filler, "", match.group(1).strip(), flags=re.IGNORECASE).strip()
+        to_raw = match.group(2).strip()
+        if from_raw and to_raw:
             return from_raw, to_raw
 
     return None, None
@@ -187,23 +200,46 @@ def find_critical_stops(graph, top_n=15, sample_size=500):
     ]
 
 
-def find_redundant_routes(stop_times_df, threshold=0.7, max_pairs=20, sample_trips=300):
+def find_redundant_routes(stop_times_df, stops_df, threshold=0.7, max_pairs=20, sample_trips=300):
     """
-    Groups stop_times by trip_id, treats each trip as a set of stop_ids, and
-    flags trip pairs whose stop sets overlap heavily (Jaccard similarity
-    above `threshold`) — candidate redundant services covering the same ground.
-    Capped to `sample_trips` trips for performance on large datasets.
+    Groups stop_times by ROUTE (the part of trip_id before the first "_" —
+    e.g. trip "10001_08_10" belongs to route "10001"), takes one
+    representative trip per route, and flags ROUTE pairs whose stop sets
+    overlap heavily (Jaccard similarity above `threshold`).
+
+    Trips belonging to the SAME route at different times of day (e.g.
+    "10001_08_10" vs "10001_08_30") are intentionally NOT compared against
+    each other — that's just normal schedule frequency (a bus running the
+    same route every 20 minutes), not redundant service. Only genuinely
+    different routes that happen to cover almost the same stops are
+    surfaced here, since that's the actionable "these two routes could
+    probably be merged/trimmed" signal a planner cares about.
+
+    Capped to `sample_trips` routes for performance on large datasets.
     """
-    trip_stop_sets = {
-        trip_id: set(group["stop_id"])
-        for trip_id, group in stop_times_df.groupby("trip_id")
-    }
-    trip_ids = list(trip_stop_sets.keys())[:sample_trips]
+    id_to_name = dict(zip(stops_df["stop_id"], stops_df["stop_name"]))
+
+    # one representative trip (in stop order) per route
+    route_stop_seq = {}
+    for trip_id, group in stop_times_df.groupby("trip_id"):
+        route_id = str(trip_id).split("_")[0]
+        if route_id in route_stop_seq:
+            continue  # already have a representative trip for this route
+        ordered = (
+            group.sort_values("stop_sequence")
+            if "stop_sequence" in group.columns
+            else group
+        )
+        route_stop_seq[route_id] = ordered["stop_id"].tolist()
+
+    route_ids = list(route_stop_seq.keys())[:sample_trips]
 
     redundant = []
-    for i in range(len(trip_ids)):
-        for j in range(i + 1, len(trip_ids)):
-            a, b = trip_stop_sets[trip_ids[i]], trip_stop_sets[trip_ids[j]]
+    for i in range(len(route_ids)):
+        for j in range(i + 1, len(route_ids)):
+            r1, r2 = route_ids[i], route_ids[j]
+            seq_a, seq_b = route_stop_seq[r1], route_stop_seq[r2]
+            a, b = set(seq_a), set(seq_b)
             if not a or not b:
                 continue
             intersection = len(a & b)
@@ -211,8 +247,12 @@ def find_redundant_routes(stop_times_df, threshold=0.7, max_pairs=20, sample_tri
             similarity = intersection / union if union else 0
             if similarity >= threshold:
                 redundant.append({
-                    "trip_a": trip_ids[i],
-                    "trip_b": trip_ids[j],
+                    "route_a": r1,
+                    "route_b": r2,
+                    "route_a_from": id_to_name.get(seq_a[0], "Unknown"),
+                    "route_a_to": id_to_name.get(seq_a[-1], "Unknown"),
+                    "route_b_from": id_to_name.get(seq_b[0], "Unknown"),
+                    "route_b_to": id_to_name.get(seq_b[-1], "Unknown"),
                     "overlap": round(similarity, 2),
                     "shared_stops": intersection,
                 })
@@ -220,8 +260,57 @@ def find_redundant_routes(stop_times_df, threshold=0.7, max_pairs=20, sample_tri
     redundant.sort(key=lambda x: x["overlap"], reverse=True)
     return redundant[:max_pairs]
 
+def remove_loops(path, coord, proximity_km=0.05):
+    """
+    Collapses any point in the path that revisits a location very close to
+    an earlier point in the same path — not just an exact stop_id repeat.
+    Delhi's GTFS gives opposite carriageways of the same road separate
+    stop_ids only a few meters apart, so a pure ID-equality check misses
+    those loops; this checks real distance instead.
+    """
+    cleaned = []
+    visited_coords = []  # (lat, lon) parallel to `cleaned`
+    for stop_id in path:
+        lat, lon = coord[stop_id]["stop_lat"], coord[stop_id]["stop_lon"]
+        loop_start = None
+        for idx, (vlat, vlon) in enumerate(visited_coords):
+            if haversine(lat, lon, vlat, vlon) <= proximity_km:
+                loop_start = idx
+                break
+        if loop_start is not None:
+            cleaned = cleaned[:loop_start + 1]
+            visited_coords = visited_coords[:loop_start + 1]
+        else:
+            cleaned.append(stop_id)
+            visited_coords.append((lat, lon))
+    return cleaned
+
+def remove_geometry_loops(geometry, proximity_km=0.03, min_gap_points=6):
+    """
+    Same idea as remove_loops(), applied to the dense ORS road polyline
+    instead of the stop list. Needed because a loop can appear WITHIN the
+    road path between two stops that are themselves far enough apart to
+    pass the stop-level check.
+    min_gap_points skips comparing against the last few points, so a
+    normal smooth curve (where nearby points are naturally close) doesn't
+    get falsely flagged as a loop.
+    """
+    cleaned = []
+    for point in geometry:
+        loop_start = None
+        search_limit = max(0, len(cleaned) - min_gap_points)
+        for idx in range(search_limit):
+            if haversine(point[0], point[1], cleaned[idx][0], cleaned[idx][1]) <= proximity_km:
+                loop_start = idx
+                break
+        if loop_start is not None:
+            cleaned = cleaned[:loop_start + 1]
+        else:
+            cleaned.append(point)
+    return cleaned
 
 @app.get("/shortest-path")
+
 def shortest_path(from_stop: str, to_stop: str):
     from_ids = stops[stops["stop_name"].str.lower() == from_stop.lower()]["stop_id"].tolist()
     to_ids = stops[stops["stop_name"].str.lower() == to_stop.lower()]["stop_id"].tolist()
@@ -242,6 +331,7 @@ def shortest_path(from_stop: str, to_stop: str):
     if not best_path:
         raise HTTPException(status_code=404, detail="No path found between these stops")
 
+    best_path = remove_loops(best_path, coord)
     best_path = simplify_path(best_path, coord)
 
     road_geometry = []
@@ -251,11 +341,12 @@ def shortest_path(from_stop: str, to_stop: str):
             coord[a]["stop_lat"], coord[a]["stop_lon"],
             coord[b]["stop_lat"], coord[b]["stop_lon"],
         )
-        if segment:
-            road_geometry.extend(segment)
-        else:
-            road_geometry.append([coord[a]["stop_lat"], coord[a]["stop_lon"]])
-            road_geometry.append([coord[b]["stop_lat"], coord[b]["stop_lon"]])
+        if not segment:
+            segment = [
+                [coord[a]["stop_lat"], coord[a]["stop_lon"]],
+                [coord[b]["stop_lat"], coord[b]["stop_lon"]],
+            ]
+        road_geometry.extend(remove_geometry_loops(segment))
 
     path_details = [
         {
@@ -311,11 +402,9 @@ def optimize(stops: list[StopInput]):
         a, b = result[i], result[i + 1]
         total_distance_km += haversine(a["lat"], a["lon"], b["lat"], b["lon"])
         segment = get_road_geometry(a["lat"], a["lon"], b["lat"], b["lon"])
-        if segment:
-            road_geometry.extend(segment)
-        else:
-            road_geometry.append([a["lat"], a["lon"]])
-            road_geometry.append([b["lat"], b["lon"]])
+        if not segment:
+            segment = [[a["lat"], a["lon"]], [b["lat"], b["lon"]]]
+        road_geometry.extend(remove_geometry_loops(segment))
 
     return {
         "optimized_stops": result,
@@ -349,7 +438,7 @@ def critical_stops(top_n: int = 15):
 
 @app.get("/route-redundancy")
 def route_redundancy(threshold: float = 0.7):
-    result = find_redundant_routes(stop_times, threshold=threshold)
+    result = find_redundant_routes(stop_times, stops, threshold=threshold)
     return {"count": len(result), "threshold": threshold, "redundant_pairs": result}
 
 
