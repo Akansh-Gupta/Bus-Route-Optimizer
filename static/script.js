@@ -1,3 +1,5 @@
+const API_BASE = "http://127.0.0.1:8000";
+
 // ── MAP SETUP ────────────────────────────────────────────────
 const map = L.map("map").setView([28.6139, 77.2090], 11);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -7,27 +9,21 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 let currentLayers = [];
 let multiStops = [];
 
+// ── SIDEBAR COLLAPSE ─────────────────────────────────────────
+function toggleSidebar() {
+  document.body.classList.toggle("collapsed");
+  // give the CSS transition a moment, then let Leaflet recalc its size
+  setTimeout(() => map.invalidateSize(), 260);
+}
+
 // ── TAB SWITCHING ─────────────────────────────────────────────
 function switchTab(tab) {
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
   document.querySelectorAll(".panel").forEach(p => p.style.display = "none");
 
-  if (tab === "passenger") {
-    document.getElementById("passenger-panel").style.display = "flex";
-    document.querySelectorAll(".tab")[0].classList.add("active");
-  } else {
-    document.getElementById("planner-panel").style.display = "flex";
-    document.querySelectorAll(".tab")[1].classList.add("active");
-  }
-
-  // recalculate map height after panel switch
-  recalcMapHeight();
-}
-
-function recalcMapHeight() {
-  const navbar = document.getElementById("navbar").offsetHeight;
-  const panel = document.querySelector(".panel:not([style*='display:none'])").offsetHeight;
-  document.getElementById("map").style.height = `calc(100vh - ${navbar + panel}px)`;
+  const order = ["passenger", "planner", "chat"];
+  document.getElementById(tab + "-panel").style.display = "flex";
+  document.querySelectorAll(".tab")[order.indexOf(tab)].classList.add("active");
 }
 
 // ── AUTOCOMPLETE ──────────────────────────────────────────────
@@ -47,7 +43,7 @@ async function showSuggestions(inputId) {
 
   clearTimeout(debounceTimers[inputId]);
   debounceTimers[inputId] = setTimeout(async () => {
-    const res = await fetch(`http://127.0.0.1:8000/search-stops?query=${encodeURIComponent(query)}`);
+    const res = await fetch(`${API_BASE}/search-stops?query=${encodeURIComponent(query)}`);
     const data = await res.json();
 
     if (!data.results.length) {
@@ -84,25 +80,39 @@ function hideSuggestions(inputId) {
 }
 
 // ── SIMPLE ROUTE ──────────────────────────────────────────────
+function extractErrorMessage(err) {
+  const detail = err && err.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(d => (d && d.msg) ? d.msg : JSON.stringify(d)).join("; ");
+  }
+  if (detail && typeof detail === "object") return detail.msg || JSON.stringify(detail);
+  return "Something went wrong talking to the server.";
+}
+
 async function findRoute() {
   const from = document.getElementById("from").value.trim();
   const to = document.getElementById("to").value.trim();
 
   if (!from || !to) { showError("Please enter both stops"); return; }
 
-  const res = await fetch(
-    `http://127.0.0.1:8000/shortest-path?from_stop=${encodeURIComponent(from)}&to_stop=${encodeURIComponent(to)}`
-  );
+  try {
+    const res = await fetch(
+      `${API_BASE}/shortest-path?from_stop=${encodeURIComponent(from)}&to_stop=${encodeURIComponent(to)}`
+    );
 
-  if (!res.ok) {
-    const err = await res.json();
-    showError(err.detail);
-    return;
+    if (!res.ok) {
+      const err = await res.json();
+      showError(extractErrorMessage(err));
+      return;
+    }
+
+    const data = await res.json();
+    drawRoute(data.path, "royalblue", data.road_geometry);
+    showInfo("Route Found", data.from, data.to, data.num_stops, data.total_distance_km);
+  } catch (e) {
+    showError("Couldn't reach the server. Is the backend running?");
   }
-
-  const data = await res.json();
-  drawRoute(data.path, "royalblue", data.road_geometry);
-  showInfo("Route Found", data.from, data.to, data.num_stops, data.total_distance_km);
 }
 
 // ── MULTI STOP ────────────────────────────────────────────────
@@ -145,7 +155,7 @@ async function optimizeMulti() {
     return;
   }
 
-  const res = await fetch("http://127.0.0.1:8000/optimize-route", {
+  const res = await fetch(`${API_BASE}/optimize-route`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(multiStops)
@@ -164,10 +174,53 @@ function clearMulti() {
   clearMap();
 }
 
+// ── CHAT (natural-language route finder) ────────────────────
+function appendChatMsg(text, cls) {
+  const log = document.getElementById("chat-log");
+  const div = document.createElement("div");
+  div.className = "chat-msg " + cls;
+  div.innerText = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function sendChat() {
+  const input = document.getElementById("chat-input");
+  const message = input.value.trim();
+  if (!message) return;
+
+  appendChatMsg(message, "user");
+  input.value = "";
+
+  try {
+    const res = await fetch(`${API_BASE}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      appendChatMsg(data.detail || "Couldn't understand that.", "bot error");
+      return;
+    }
+
+    drawRoute(data.path, "royalblue", data.road_geometry);
+    showInfo("Route Found", data.from, data.to, data.num_stops, data.total_distance_km);
+    appendChatMsg(
+      `Found a route from ${data.from} to ${data.to} — ${data.num_stops} stops, ${data.total_distance_km} km.`,
+      "bot"
+    );
+  } catch (e) {
+    appendChatMsg("Something went wrong reaching the server.", "bot error");
+  }
+}
+
 /// ── PLANNER FEATURES ─────────────────────────────────────────
 async function findDeadZones() {
   clearMap();
-  const res = await fetch("http://127.0.0.1:8000/dead-zones?grid_size_km=0.5&radius_km=1.0");
+  const res = await fetch(`${API_BASE}/dead-zones?grid_size_km=0.5&radius_km=1.0`);
   const data = await res.json();
 
   data.dead_zones.forEach(z => {
@@ -188,7 +241,7 @@ async function findDeadZones() {
 
 async function findCriticalStops() {
   clearMap();
-  const res = await fetch("http://127.0.0.1:8000/critical-stops?top_n=15");
+  const res = await fetch(`${API_BASE}/critical-stops?top_n=15`);
   const data = await res.json();
 
   data.critical_stops.forEach((s, i) => {
@@ -212,7 +265,7 @@ async function showHeatmap() {
   clearMap();
   if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
 
-  const res = await fetch("http://127.0.0.1:8000/all-stops");
+  const res = await fetch(`${API_BASE}/all-stops`);
   const data = await res.json();
 
   const points = data.stops.map(s => [s.lat, s.lon, 0.5]);
@@ -225,24 +278,41 @@ async function showHeatmap() {
 
 async function findRedundantRoutes() {
   clearMap();
-  const res = await fetch("http://127.0.0.1:8000/route-redundancy?threshold=0.7");
+  const res = await fetch(`${API_BASE}/route-redundancy?threshold=0.7`);
   const data = await res.json();
 
   if (!data.redundant_pairs.length) {
-    showResultsList("Route Redundancy", ["No highly overlapping trip pairs found above the 70% threshold."]);
+    showResultsList("Route Redundancy", ["No two different routes overlap above the 70% threshold."]);
     return;
   }
 
-  showResultsList(`Redundant Route Pairs (${data.count})`,
-    data.redundant_pairs.map(p =>
-      `Trip ${p.trip_a} ↔ Trip ${p.trip_b} — ${Math.round(p.overlap * 100)}% overlap (${p.shared_stops} shared stops)`
-    ));
+  showResultsList(
+    `Redundant Routes (${data.count})`,
+    [
+      "Different routes that cover almost the same stops — candidates to merge or trim. " +
+      "(Runs of the same route at different times of day are excluded — those aren't redundancy.)",
+      ...data.redundant_pairs.map(p =>
+        `Route ${p.route_a} (${p.route_a_from} → ${p.route_a_to}) overlaps ` +
+        `Route ${p.route_b} (${p.route_b_from} → ${p.route_b_to}) — ` +
+        `${Math.round(p.overlap * 100)}% shared (${p.shared_stops} stops in common)`
+      )
+    ]
+  );
 }
 
 function showResultsList(title, lines) {
   const panel = document.getElementById("results-panel");
-  panel.innerHTML = `<h3>${title}</h3>` + lines.map(l => `<p>${l}</p>`).join("");
+  const body = document.getElementById("results-body");
+  body.innerHTML = `<h3>${title}</h3>` + lines.map(l => `<p>${l}</p>`).join("");
   panel.style.display = "block";
+}
+
+function hideResults() {
+  document.getElementById("results-panel").style.display = "none";
+}
+
+function hideInfo() {
+  document.getElementById("info").style.display = "none";
 }
 
 // ── MAP HELPERS ───────────────────────────────────────────────
@@ -256,6 +326,21 @@ function drawRoute(stops, color, roadGeometry) {
   // draw the route line FIRST so stop markers always render on top of it
   const line = L.polyline(lineCoords, { color, weight: 5, opacity: 0.8 }).addTo(map);
   currentLayers.push(line);
+
+  const arrows = L.polylineDecorator(line, {
+    patterns: [
+      {
+        offset: 25,
+        repeat: 80,
+        symbol: L.Symbol.arrowHead({
+          pixelSize: 10,
+          polygon: false,
+          pathOptions: { stroke: true, color, weight: 3, opacity: 0.9 }
+        })
+      }
+    ]
+  }).addTo(map);
+  currentLayers.push(arrows);
 
   stops.forEach((stop, i) => {
     const isFirst = i === 0;
@@ -277,9 +362,8 @@ function drawRoute(stops, color, roadGeometry) {
 function clearMap() {
   currentLayers.forEach(l => map.removeLayer(l));
   currentLayers = [];
-  document.getElementById("info").style.display = "none";
-  const panel = document.getElementById("results-panel");
-  if (panel) panel.style.display = "none";
+  hideInfo();
+  hideResults();
 }
 
 // ── UI HELPERS ────────────────────────────────────────────────
