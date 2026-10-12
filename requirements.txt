@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pandas
+networkx
+ortools
+requests
+python-dotenv
+pydantic
+numpy
