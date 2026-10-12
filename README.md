@@ -1,193 +1,93 @@
-# 🚌 Delhi Bus Route Optimizer
+# Delhi Bus Route Optimizer
 
-A shortest-path based bus route optimizer built on real Delhi GTFS data. Given any two bus stops in Delhi, it finds the most efficient route using Dijkstra's algorithm and displays it on an interactive map.
+Finds the shortest bus route between two Delhi stops, draws it on an interactive map along real roads, optimizes multi-stop trips, and analyzes the transit network, all built on real Delhi GTFS data (10,559 stops).
 
-> 🚧 **Status: In Progress** — Core routing and API done. Map visualization and multi-stop optimizer coming next.
+<!-- Add screenshots or a short GIF here, e.g. ![Route demo](docs/demo.gif) -->
 
----
+## Features
 
-## 📌 Features
+**Passenger view**
+- Shortest route between two named stops using A* search, with stop autocomplete
+- Real road-following geometry on the map (OpenRouteService), with direction arrows and visible stop markers
+- Multi-stop route optimization: best visiting order solved as a Traveling Salesman Problem, with total distance
+- Natural-language chat: "take me from Laxmi Nagar to ITO" (rule-based parser, no paid API)
 
-- ✅ Shortest path between any two Delhi bus stops
-- ✅ Real distance calculation using Haversine formula
-- ✅ REST API to query routes programmatically
-- ✅ Stop name search endpoint
-- ✅ Interactive map with route visualization (Leaflet.js)
-- ⏳ Multi-stop route optimizer (OR-Tools) — coming soon
-- ⏳ AI chatbot interface — coming soon
+**Planner view**
+- **Dead Zone Detector:** grid search over Delhi for areas with no stop within a given radius
+- **Critical Stop Finder:** betweenness centrality to find stops most routes funnel through
+- **Coverage Heatmap:** stop density visualization
+- **Route Redundancy:** Jaccard similarity of stop sets to flag overlapping routes
 
----
-
-## 🗂️ Project Structure
-
-```
-bus-optimizer/
-├── data/
-│   ├── stops.txt           # Delhi bus stop locations (GTFS)
-│   └── stop_times.txt      # Stop sequences per trip (GTFS)
-├── main.py                 # FastAPI server + API endpoints
-├── index.html              # Frontend map (Leaflet.js)
-└── README.md
-```
-
----
-
-## 🧠 How It Works
-
-```
-GTFS Data (stops + trips)
-        ↓
-Build a weighted graph
-  nodes  = bus stops
-  edges  = direct connections between consecutive stops
-  weight = real distance in km (Haversine formula)
-        ↓
-Dijkstra's Algorithm finds shortest path
-        ↓
-FastAPI serves the result as JSON
-        ↓
-Leaflet.js draws it on OpenStreetMap
-```
-
----
-
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Layer | Technology |
 |---|---|
 | Language | Python 3.11+ |
-| Graph & Pathfinding | NetworkX (Dijkstra) |
-| Data Processing | Pandas |
+| Graph and pathfinding | NetworkX (A*, directed graph) |
+| Multi-stop optimization | Google OR-Tools |
+| Data processing | Pandas |
 | Backend API | FastAPI + Uvicorn |
-| Frontend Map | Leaflet.js + OpenStreetMap |
-| Dataset | Delhi GTFS (otd.delhi.gov.in) |
+| Road geometry | OpenRouteService (ORS) API |
+| Frontend | Leaflet.js, OpenStreetMap tiles, leaflet.heat |
+| Dataset | Delhi GTFS from [Open Transit Data](https://otd.delhi.gov.in) |
 
----
+## How It Works
 
-## 📊 Dataset
+- **Graph:** bus stops are nodes; direct bus connections are directed edges weighted by Haversine distance in km.
+- **A\*:** uses Haversine distance to the target as the heuristic. It never overestimates, so A* guarantees the shortest path while exploring fewer nodes than Dijkstra.
+- **Directed graph with fallback:** Delhi's feed gives opposite carriageways separate stop IDs, so an undirected graph let routes illegally hop across the road and zigzag. The graph is directed, with an undirected fallback used only when no directed path exists or the directed path is 20%+ longer. The API flags this with `used_undirected_fallback`.
+- **Path cleanup:** `simplify_path()` merges stops under 80 m apart and `remove_loops()` trims revisits before the path is sent to ORS.
+- **Road geometry:** ORS traces real roads between consecutive stops; loops are removed per segment. If ORS fails, the app falls back to straight lines.
+- **Multi-stop:** OR-Tools solves the visiting order over a Haversine distance matrix, then ORS traces each leg.
 
-Data sourced from the **Delhi Open Transit Data portal** → [otd.delhi.gov.in](https://otd.delhi.gov.in/documentation/)
+## API Endpoints
 
-```
-Stops loaded:       10,559
-Route connections:  20,646
-```
-
----
-
-## 🚀 Getting Started
-
-### 1. Clone the repo
-```bash
-git clone https://github.com/yourusername/bus-optimizer.git
-cd bus-optimizer
-```
-
-### 2. Install dependencies
-```bash
-pip install fastapi uvicorn pandas networkx
-```
-
-### 3. Add GTFS data
-Download Delhi GTFS data from [otd.delhi.gov.in](https://otd.delhi.gov.in/documentation/) and place `stops.txt` and `stop_times.txt` inside the `data/` folder.
-
-### 4. Run the API server
-```bash
-uvicorn main:app --reload
-```
-
-### 5. Open the map
-Open `index.html` directly in your browser.
-
----
-
-## 🔌 API Endpoints
-
-### `GET /shortest-path`
-Find the shortest route between two stops.
-
-**Parameters:**
-| Param | Type | Example |
+| Endpoint | Method | Purpose |
 |---|---|---|
-| `from_stop` | string | `Laxmi Nagar` |
-| `to_stop` | string | `ITO` |
+| `/shortest-path` | GET | A* shortest path between two named stops, with road geometry |
+| `/search-stops` | GET | Autocomplete by partial stop name |
+| `/optimize-route` | POST | Multi-stop TSP ordering with road geometry |
+| `/dead-zones` | GET | Grid points with no coverage within a radius |
+| `/all-stops` | GET | Bulk stop coordinates (heatmap) |
+| `/critical-stops` | GET | Top-N stops by betweenness centrality |
+| `/route-redundancy` | GET | Route pairs with high stop-set overlap |
+| `/chat` | POST | Natural language to shortest path |
 
-**Example:**
+## Setup
+
+1. **Clone and install**
+   ```bash
+   git clone https://github.com/Akansh-Gupta/Bus-Route-Optimizer.git
+   cd Bus-Route-Optimizer
+   pip install -r requirements.txt
+   ```
+2. **Download the GTFS data** from [otd.delhi.gov.in](https://otd.delhi.gov.in) and place `stops.txt` and `stop_times.txt` in a `data/` folder. The data is not included in the repository because of its size.
+3. **Add an OpenRouteService key.** Get a free key at [openrouteservice.org](https://openrouteservice.org) and create a `.env` file in the project root:
+   ```
+   ORS_API_KEY=your_key_here
+   ```
+4. **Run the server**
+   ```bash
+   python -m uvicorn main:app --reload
+   ```
+5. Open `index.html` in your browser while the server is running (API at `http://127.0.0.1:8000`).
+
+## Project Structure
+
 ```
-GET http://127.0.0.1:8000/shortest-path?from_stop=Laxmi Nagar&to_stop=ITO
-```
-
-**Response:**
-```json
-{
-  "from": "Laxmi Nagar",
-  "to": "ITO",
-  "total_distance_km": 3.82,
-  "num_stops": 5,
-  "path": [
-    { "stop_id": 131, "stop_name": "Laxmi Nagar", "lat": 28.63, "lon": 77.27 },
-    { "stop_id": 1116, "stop_name": "Laxmi Nagar / Shakarpur Crossing", "lat": 28.63, "lon": 77.26 },
-    ...
-  ]
-}
-```
-
----
-
-### `GET /search-stops`
-Search for stop names (useful for autocomplete).
-
-**Parameters:**
-| Param | Type | Example |
-|---|---|---|
-| `query` | string | `Laxmi` |
-
-**Example:**
-```
-GET http://127.0.0.1:8000/search-stops?query=Laxmi
-```
-
-**Response:**
-```json
-{
-  "results": [
-    { "stop_id": 131, "stop_name": "Laxmi Nagar" },
-    { "stop_id": 277, "stop_name": "Laxmi Vihar" },
-    ...
-  ]
-}
+bus-route-optimizer/
+├── data/            GTFS files (gitignored)
+├── static/          script.js, style.css
+├── main.py          FastAPI server, graph, A*, endpoints
+├── optimizer.py     OR-Tools TSP and dead-zone detection
+├── index.html
+├── requirements.txt
+└── README.md
 ```
 
----
+## Limitations and Future Work
 
-## 📍 Interactive API Docs
-FastAPI auto-generates a testing UI at:
-```
-http://127.0.0.1:8000/docs
-```
-
----
-
-## 🗺️ Roadmap
-
-- [x] Load real Delhi GTFS data
-- [x] Build weighted graph with Haversine distances
-- [x] Dijkstra shortest path between two stops
-- [x] FastAPI backend with JSON responses
-- [x] Leaflet.js map with route visualization
-- [ ] Multi-stop optimizer using Google OR-Tools
-- [ ] AI chatbot interface (natural language input)
-- [ ] Deployment on Render + Vercel
-
----
-
-## 👤 Author
-
-Akansh Gupta
-[GitHub](https://github.com/Akansh-Gupta) · [LinkedIn](www.linkedin.com/in/akanshgupta-)
-
----
-
-## 📄 License
-
-This project is for educational purposes. GTFS data © Delhi Integrated Multi-Modal Transit System (DIMTS).
+- **No transfers or timetables:** cost is distance only; edges don't know which bus route they belong to. Upgrade: (stop, route) nodes with transfer penalties and time-dependent routing using GTFS schedules.
+- **Straight-line distances:** edge weights and TSP ordering use Haversine, which underestimates road distance. Upgrade: ORS Matrix API.
+- **Data quality:** the feed has no `parent_station` or `direction_id`, and some stops share one ID across both directions. Routing accuracy is bounded by the source data.
+- **Static data only:** GTFS-realtime vehicle positions exist but are not integrated.
